@@ -9,6 +9,8 @@ import {
   ConfigureResult,
   CertificateData,
   ParseCertificateResult,
+  WebSocketOptions,
+  WebSocketConnectionResult,
 } from "./ExpoMutualTls.types";
 
 declare class ExpoMutualTlsModule extends NativeModule<ExpoMutualTlsModuleEvents> {
@@ -25,6 +27,12 @@ declare class ExpoMutualTlsModule extends NativeModule<ExpoMutualTlsModuleEvents
   makeRequest(options: MakeRequestOptions): Promise<MakeRequestResult>;
   isConfigured: boolean;
   currentState: string;
+
+  // WebSocket methods
+  connectWebSocket(options: WebSocketOptions): Promise<WebSocketConnectionResult>;
+  disconnectWebSocket(connectionId: string): Promise<void>;
+  sendWebSocketMessage(connectionId: string, message: string): Promise<void>;
+  getWebSocketState(connectionId: string): Promise<string>;  // 'connecting' | 'open' | 'closing' | 'closed'
 }
 
 // This call loads the native module object from the JSI.

@@ -3,6 +3,7 @@ export type ExpoMutualTlsModuleEvents = {
   onDebugLog: (params: DebugLogEventPayload) => void;
   onError: (params: ErrorEventPayload) => void;
   onCertificateExpiry: (params: CertificateExpiryEventPayload) => void;
+  onWebSocketEvent: (params: WebSocketEventPayload) => void;
 };
 
 export type ChangeEventPayload = {
@@ -28,6 +29,32 @@ export type CertificateExpiryEventPayload = {
   subject: string;
   expiry: number;
   warning?: boolean;
+};
+
+// WebSocket Types
+export type WebSocketOptions = {
+  url: string;
+  protocols?: string[];  // WebSocket subprotocols
+};
+
+export type WebSocketMessage = {
+  type: 'text';
+  data: string;
+};
+
+export type WebSocketConnectionResult = {
+  success: boolean;
+  connectionId: string;  // Unique ID for connection management
+  error?: string;
+};
+
+export type WebSocketEventPayload = {
+  connectionId: string;
+  type: 'open' | 'message' | 'close' | 'error';
+  data?: string;        // Message data for 'message' event
+  code?: number;        // Close code for 'close' event
+  reason?: string;      // Close reason for 'close' event
+  error?: string;       // Error message for 'error' event
 };
 
 export type CertificateFormat = "p12" | "pem";

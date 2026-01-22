@@ -156,6 +156,7 @@ export class ExpoMutualTls {
     ExpoMutualTlsModule.removeAllListeners("onDebugLog");
     ExpoMutualTlsModule.removeAllListeners("onError");
     ExpoMutualTlsModule.removeAllListeners("onCertificateExpiry");
+    ExpoMutualTlsModule.removeAllListeners("onWebSocketEvent");
   }
 
   /**
@@ -204,6 +205,110 @@ export class ExpoMutualTls {
    */
   static async getCertificatesInfo(): Promise<ParseCertificateResult> {
     return ExpoMutualTlsModule.getCertificatesInfo();
+  }
+
+  // WebSocket Methods
+
+  /**
+   * Connect to a WebSocket server with mTLS authentication
+   * @param url - WebSocket URL (wss:// or ws://)
+   * @param protocols - Optional list of WebSocket subprotocols
+   * @returns Connection ID for managing the WebSocket connection
+   */
+  static async connectWebSocket(
+    url: string,
+    protocols?: string[]
+  ): Promise<string> {
+    const result = await ExpoMutualTlsModule.connectWebSocket({ url, protocols });
+    if (result.success) {
+      return result.connectionId;
+    }
+    throw new Error(result.error || "Failed to connect WebSocket");
+  }
+
+  /**
+   * Disconnect from a WebSocket server
+   * @param connectionId - Connection ID returned from connectWebSocket
+   */
+  static async disconnectWebSocket(connectionId: string): Promise<void> {
+    return ExpoMutualTlsModule.disconnectWebSocket(connectionId);
+  }
+
+  /**
+   * Send a message through the WebSocket connection
+   * @param connectionId - Connection ID returned from connectWebSocket
+   * @param message - Message string to send
+   */
+  static async sendWebSocketMessage(
+    connectionId: string,
+    message: string
+  ): Promise<void> {
+    return ExpoMutualTlsModule.sendWebSocketMessage(connectionId, message);
+  }
+
+  /**
+   * Get the current state of a WebSocket connection
+   * @param connectionId - Connection ID returned from connectWebSocket
+   * @returns Connection state: 'connecting', 'open', 'closing', or 'closed'
+   */
+  static async getWebSocketState(connectionId: string): Promise<string> {
+    return ExpoMutualTlsModule.getWebSocketState(connectionId);
+  }
+
+  // WebSocket Event Listeners
+
+  /**
+   * Listen for WebSocket connection open events
+   * @param callback - Callback function with connectionId parameter
+   * @returns Event subscription for removing the listener
+   */
+  static onWebSocketOpen(callback: (connectionId: string) => void) {
+    return ExpoMutualTlsModule.addListener("onWebSocketEvent", (event) => {
+      if (event.type === "open") callback(event.connectionId);
+    });
+  }
+
+  /**
+   * Listen for WebSocket message events
+   * @param callback - Callback function with connectionId and message data
+   * @returns Event subscription for removing the listener
+   */
+  static onWebSocketMessage(
+    callback: (connectionId: string, data: string) => void
+  ) {
+    return ExpoMutualTlsModule.addListener("onWebSocketEvent", (event) => {
+      if (event.type === "message") callback(event.connectionId, event.data);
+    });
+  }
+
+  /**
+   * Listen for WebSocket connection close events
+   * @param callback - Callback function with connectionId, close code, and reason
+   * @returns Event subscription for removing the listener
+   */
+  static onWebSocketClose(
+    callback: (
+      connectionId: string,
+      code?: number,
+      reason?: string
+    ) => void
+  ) {
+    return ExpoMutualTlsModule.addListener("onWebSocketEvent", (event) => {
+      if (event.type === "close") {
+        callback(event.connectionId, event.code, event.reason);
+      }
+    });
+  }
+
+  /**
+   * Listen for WebSocket error events
+   * @param callback - Callback function with connectionId and error message
+   * @returns Event subscription for removing the listener
+   */
+  static onWebSocketError(callback: (connectionId: string, error: string) => void) {
+    return ExpoMutualTlsModule.addListener("onWebSocketEvent", (event) => {
+      if (event.type === "error") callback(event.connectionId, event.error);
+    });
   }
 }
 

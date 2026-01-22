@@ -23,6 +23,7 @@ public class ExpoMutualTlsModule: Module, @unchecked Sendable {
     private let certificateParser = CertificateParser.shared
     internal let networkManager = NetworkManager()
     private lazy var sessionDelegate = ExpoMutualTlsURLSessionDelegate(module: self)
+    private let webSocketManager = WebSocketManager(sslContextManager: networkManager.getSSLContextManager(), sessionDelegate: sessionDelegate)
     
     // MARK: - Public Properties (Thread-Safe)
     
@@ -152,7 +153,7 @@ public class ExpoMutualTlsModule: Module, @unchecked Sendable {
             guard let self = self else {
                 return MakeRequestResult.failure("Module deallocated").toDictionary()
             }
-            
+
             do {
                 let result = try await self.testConnection(url: url)
                 return result.toDictionary()
@@ -161,19 +162,63 @@ public class ExpoMutualTlsModule: Module, @unchecked Sendable {
                 return MakeRequestResult.failure(error.localizedDescription).toDictionary()
             }
         }
-        
-        
+
+        // WebSocket Operations
+        AsyncFunction("connectWebSocket") { [weak self] (options: [String: Any]) in
+            guard let self = self else {
+                return ["success": false, "error": "Module deallocated"] as [String: Any]
+            }
+
+            guard let url = options["url"] as? String else {
+                self.handleError(ExpoMutualTlsError.missingRequiredField("URL is required"), context: "connectWebSocket")
+                return ["success": false, "error": "URL is required"] as [String: Any]
+            }
+
+            let protocols = options["protocols"] as? [String]
+
+            do {
+                let connectionId = try await self.webSocketManager.connectWebSocket(url: url, protocols: protocols, moduleId: self)
+                return ["success": true, "connectionId": connectionId] as [String: Any]
+            } catch {
+                self.handleError(error, context: "connectWebSocket")
+                return ["success": false, "error": error.localizedDescription] as [String: Any]
+            }
+        }
+
+        AsyncFunction("disconnectWebSocket") { [weak self] (connectionId: String) in
+            guard let self = self else { return }
+            do {
+                try await self.webSocketManager.disconnectWebSocket(connectionId: connectionId)
+            } catch {
+                self.handleError(error, context: "disconnectWebSocket")
+            }
+        }
+
+        AsyncFunction("sendWebSocketMessage") { [weak self] (connectionId: String, message: String) in
+            guard let self = self else { return }
+            do {
+                try await self.webSocketManager.sendMessage(connectionId: connectionId, message: message)
+            } catch {
+                self.handleError(error, context: "sendWebSocketMessage")
+            }
+        }
+
+        AsyncFunction("getWebSocketState") { [weak self] (connectionId: String) -> String? in
+            return self?.webSocketManager.getConnectionState(connectionId: connectionId)
+        }
+
+
         // Properties exposed to JavaScript
         Property("isConfigured") { [weak self] in
             return self?.isConfigured ?? false
         }
-        
+
         Property("currentState") { [weak self] in
             return self?.currentState.rawValue ?? TlsState.notConfigured.rawValue
         }
-        
-        // Events for debugging, error handling, and certificate expiry warnings
-        Events("onDebugLog", "onError", "onCertificateExpiry")
+
+        // Events for debugging, error handling, certificate expiry warnings, and WebSocket events
+        Events("onDebugLog", "onError", "onCertificateExpiry", "onWebSocketEvent")
     }
     
     // MARK: - Core Implementation Methods
@@ -626,10 +671,10 @@ public class ExpoMutualTlsModule: Module, @unchecked Sendable {
     
     private func handleError(_ error: Error, context: String) {
         let expoError = error as? ExpoMutualTlsError ?? ExpoMutualTlsError.unknownError(error.localizedDescription)
-        
+
         print("[\(Self.logTag)] Error in \(context): \(expoError.errorDescription ?? "Unknown")")
         emitErrorEvent(message: expoError.errorDescription ?? "Unknown error", code: expoError.code)
-        
+
         // Update state on critical errors
         if case .sslHandshakeFailed = expoError {
             stateQueue.async(flags: .barrier) { [weak self] in
@@ -637,6 +682,29 @@ public class ExpoMutualTlsModule: Module, @unchecked Sendable {
                 self?._currentState = .error
             }
         }
+    }
+
+    // MARK: - WebSocket Event Emission
+
+    internal func sendWebSocketEvent(
+        connectionId: String,
+        type: String,
+        data: String?,
+        code: Int?,
+        reason: String?,
+        error: String?
+    ) {
+        var eventData: [String: Any] = [
+            "connectionId": connectionId,
+            "type": type
+        ]
+
+        if let data = data { eventData["data"] = data }
+        if let code = code { eventData["code"] = code }
+        if let reason = reason { eventData["reason"] = reason }
+        if let error = error { eventData["error"] = error }
+
+        sendEvent("onWebSocketEvent", eventData)
     }
 }
 

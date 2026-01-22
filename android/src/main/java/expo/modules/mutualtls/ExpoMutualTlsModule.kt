@@ -73,6 +73,7 @@ class ExpoMutualTlsModule : Module() {
     @Volatile private var trustManager: X509TrustManager? = null
     private val stateLock = Any()
     @JvmStatic var moduleInstance: ExpoMutualTlsModule? = null
+    private val activeWebSockets = ConcurrentHashMap<String, okhttp3.WebSocket>()
   }
 
   init { moduleInstance = this }
@@ -247,13 +248,79 @@ class ExpoMutualTlsModule : Module() {
       }
     }
 
+    // --- WebSocket Operations ---
+
+    AsyncFunction("connectWebSocket").Coroutine { options: Map<String, Any> ->
+      val url = options["url"] as? String ?: throw MutualTlsException("URL is required")
+      val protocols = options["protocols"] as? List<String>
+
+      val factory = sslSocketFactory ?: throw MutualTlsException("SSL not configured")
+      val tm = trustManager ?: throw MutualTlsException("Trust manager missing")
+
+      // Create OkHttp client with mTLS
+      val client = OkHttpClient.Builder()
+        .sslSocketFactory(factory, tm)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+      val requestBuilder = okhttp3.Request.Builder().url(url)
+
+      // Add protocols if specified
+      if (protocols != null && protocols.isNotEmpty()) {
+        requestBuilder.addHeader("Sec-WebSocket-Protocol", protocols.joinToString(", "))
+      }
+
+      val request = requestBuilder.build()
+      val connectionId = java.util.UUID.randomUUID().toString()
+      val wsListener = WebSocketEventListener(connectionId, this)
+
+      val webSocket = client.newWebSocket(request, wsListener)
+
+      activeWebSockets[connectionId] = webSocket
+
+      Log.d(TAG, "WebSocket connection initiated: $connectionId")
+
+      mapOf("success" to true, "connectionId" to connectionId)
+    }
+
+    AsyncFunction("disconnectWebSocket") { connectionId: String ->
+      try {
+        activeWebSockets[connectionId]?.close(1000, "Client disconnecting")
+        activeWebSockets.remove(connectionId)
+        Log.d(TAG, "WebSocket disconnected: $connectionId")
+      } catch (e: Exception) {
+        Log.e(TAG, "Failed to disconnect WebSocket: $connectionId", e)
+        throw e.toCodedException()
+      }
+    }
+
+    AsyncFunction("sendWebSocketMessage").Coroutine { connectionId: String, message: String ->
+      val webSocket = activeWebSockets[connectionId]
+        ?: throw MutualTlsException("WebSocket connection not found: $connectionId")
+
+      webSocket.send(message)
+      Log.d(TAG, "WebSocket message sent: $connectionId")
+    }
+
+    AsyncFunction("getWebSocketState") { connectionId: String ->
+      val webSocket = activeWebSockets[connectionId]
+      if (webSocket != null) {
+        "open"
+      } else {
+        "closed"
+      }
+    }
+
 
     // Properties & events
     Property("isConfigured") { isConfigured }
     Property("currentState") {
       when { isConfigured -> TlsState.CONFIGURED.value; else -> TlsState.NOT_CONFIGURED.value }
     }
-    Events("onDebugLog", "onError", "onCertificateExpiry")
+    Events("onDebugLog", "onError", "onCertificateExpiry", "onWebSocketEvent")
   }
 
   // ---------- Internal helpers ----------
@@ -782,6 +849,73 @@ class ExpoMutualTlsModule : Module() {
     } catch (e: Exception) {
       Log.e(TAG, "mTLS request with options failed", e)
       throw MutualTlsException("mTLS request failed: ${e.message}", e)
+    }
+  }
+
+  // ---------- WebSocket Event Emission ----------
+
+  private fun sendWebSocketEvent(
+    connectionId: String,
+    type: String,
+    data: String? = null,
+    code: Int? = null,
+    reason: String? = null,
+    error: String? = null
+  ) {
+    val eventData = mutableMapOf(
+      "connectionId" to connectionId,
+      "type" to type
+    )
+
+    data?.let { eventData["data"] = it }
+    code?.let { eventData["code"] = it }
+    reason?.let { eventData["reason"] = it }
+    error?.let { eventData["error"] = it }
+
+    sendEvent("onWebSocketEvent", bundleOf(*eventData.toList().toTypedArray()))
+  }
+
+  // ---------- WebSocket Listener ----------
+
+  private inner class WebSocketEventListener(
+    private val connectionId: String,
+    private val module: ExpoMutualTlsModule
+  ) : okhttp3.WebSocketListener() {
+
+    override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
+      Log.d(TAG, "WebSocket opened: $connectionId")
+      sendWebSocketEvent(connectionId, "open")
+    }
+
+    override fun onMessage(webSocket: okhttp3.WebSocket, text: String) {
+      Log.d(TAG, "WebSocket message received: $connectionId")
+      sendWebSocketEvent(connectionId, "message", data = text)
+    }
+
+    override fun onMessage(webSocket: okhttp3.WebSocket, bytes: okio.ByteString) {
+      // Binary data - send as base64
+      Log.d(TAG, "WebSocket binary message received: $connectionId")
+      sendWebSocketEvent(connectionId, "message", data = bytes.base64())
+    }
+
+    override fun onClosing(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
+      Log.d(TAG, "WebSocket closing: $connectionId, code: $code")
+    }
+
+    override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
+      Log.d(TAG, "WebSocket closed: $connectionId, code: $code")
+      sendWebSocketEvent(connectionId, "close", code = code, reason = reason)
+      activeWebSockets.remove(connectionId)
+    }
+
+    override fun onFailure(
+      webSocket: okhttp3.WebSocket,
+      t: Throwable,
+      response: okhttp3.Response?
+    ) {
+      Log.e(TAG, "WebSocket error: $connectionId", t)
+      sendWebSocketEvent(connectionId, "error", error = t.message)
+      activeWebSockets.remove(connectionId)
     }
   }
 }

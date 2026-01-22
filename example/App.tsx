@@ -18,6 +18,8 @@ export default function App() {
   const [currentFormat, setCurrentFormat] = useState<CertificateFormat>("p12");
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [wsConnectionId, setWsConnectionId] = useState<string | null>(null);
+  const [wsStatus, setWsStatus] = useState<string>("Disconnected");
 
   useEffect(() => {
     // Set up event listeners using ExpoMutualTls utility functions
@@ -65,11 +67,38 @@ export default function App() {
       });
     });
 
+    // WebSocket event listeners
+    const wsOpenSubscription = ExpoMutualTls.onWebSocketOpen((connectionId) => {
+      addLog(`🔗 WebSocket connected: ${connectionId.substring(0, 8)}...`);
+      setWsStatus("Connected");
+    });
+
+    const wsMessageSubscription = ExpoMutualTls.onWebSocketMessage((connectionId, data) => {
+      addLog(`📨 WebSocket message: ${data.substring(0, 50)}...`);
+      console.log("WebSocket message:", { connectionId, data });
+    });
+
+    const wsCloseSubscription = ExpoMutualTls.onWebSocketClose((connectionId, code, reason) => {
+      addLog(`🔌 WebSocket closed: ${connectionId.substring(0, 8)}... (${code})`);
+      setWsStatus("Disconnected");
+      setWsConnectionId(null);
+    });
+
+    const wsErrorSubscription = ExpoMutualTls.onWebSocketError((connectionId, error) => {
+      addLog(`❌ WebSocket error: ${error}`);
+      setWsStatus("Error");
+      console.error("WebSocket error:", { connectionId, error });
+    });
+
     // Cleanup event listeners on unmounting
     return () => {
       debugSubscription.remove();
       errorSubscription.remove();
       expirySubscription.remove();
+      wsOpenSubscription.remove();
+      wsMessageSubscription.remove();
+      wsCloseSubscription.remove();
+      wsErrorSubscription.remove();
     };
   }, []);
 
@@ -585,6 +614,91 @@ export default function App() {
     Alert.alert("Listeners Cleared", "All event listeners have been removed");
   };
 
+  // WebSocket Demo Functions
+
+  const connectWebSocket = async () => {
+    if (!isConfigured) {
+      Alert.alert("Error", "Please configure and store certificates first");
+      return;
+    }
+
+    try {
+      setStatus("Connecting WebSocket...");
+      setWsStatus("Connecting...");
+
+      // Replace with your actual WebSocket URL
+      const wsUrl = "wss://your-websocket-server.com/ws";
+
+      addLog(`Connecting to WebSocket: ${wsUrl}`);
+
+      const connectionId = await ExpoMutualTls.connectWebSocket(wsUrl);
+
+      setWsConnectionId(connectionId);
+      setStatus("WebSocket Connected");
+      addLog(`WebSocket connection established: ${connectionId.substring(0, 8)}...`);
+    } catch (error) {
+      setStatus("WebSocket Error");
+      setWsStatus("Error");
+      addLog(`WebSocket connection error: ${error}`);
+      Alert.alert("WebSocket Error", `Failed to connect: ${error}`);
+    }
+  };
+
+  const disconnectWebSocket = async () => {
+    if (!wsConnectionId) {
+      Alert.alert("Error", "No active WebSocket connection");
+      return;
+    }
+
+    try {
+      setStatus("Disconnecting WebSocket...");
+      await ExpoMutualTls.disconnectWebSocket(wsConnectionId);
+      setStatus("WebSocket Disconnected");
+      setWsConnectionId(null);
+      addLog("WebSocket disconnected successfully");
+    } catch (error) {
+      setStatus("WebSocket Disconnect Error");
+      addLog(`WebSocket disconnect error: ${error}`);
+      Alert.alert("Error", `Failed to disconnect: ${error}`);
+    }
+  };
+
+  const sendWebSocketMessage = async () => {
+    if (!wsConnectionId) {
+      Alert.alert("Error", "No active WebSocket connection");
+      return;
+    }
+
+    try {
+      const message = `Hello, WebSocket! Time: ${new Date().toISOString()}`;
+      await ExpoMutualTls.sendWebSocketMessage(wsConnectionId, message);
+      setStatus("Message Sent");
+      addLog(`WebSocket message sent: ${message.substring(0, 30)}...`);
+    } catch (error) {
+      setStatus("Send Error");
+      addLog(`WebSocket send error: ${error}`);
+      Alert.alert("Error", `Failed to send message: ${error}`);
+    }
+  };
+
+  const checkWebSocketState = async () => {
+    if (!wsConnectionId) {
+      addLog("No active WebSocket connection");
+      return;
+    }
+
+    try {
+      const state = await ExpoMutualTls.getWebSocketState(wsConnectionId);
+      setStatus(`WebSocket State: ${state}`);
+      addLog(`WebSocket state: ${state}`);
+      Alert.alert("WebSocket State", `Current state: ${state}`);
+    } catch (error) {
+      setStatus("State Check Error");
+      addLog(`State check error: ${error}`);
+      Alert.alert("Error", `Failed to get WebSocket state: ${error}`);
+    }
+  };
+
   // console.log(logs.map(log => log.replace(/\s+/g, ' ')).join('\n'));
 
   return (
@@ -657,6 +771,38 @@ export default function App() {
             title="Test Response Types"
             onPress={testResponseTypes}
             disabled={!isConfigured}
+          />
+        </Group>
+
+        <Group name="WebSocket">
+          <View style={styles.wsStatusContainer}>
+            <Text style={styles.wsStatusLabel}>Status: </Text>
+            <Text style={[styles.wsStatusText, wsStatus === 'Connected' && styles.wsStatusConnected]}>
+              {wsStatus}
+            </Text>
+          </View>
+          <Button
+            title="Connect WebSocket"
+            onPress={connectWebSocket}
+            disabled={!isConfigured || wsStatus !== 'Disconnected'}
+          />
+          <View style={styles.buttonSpacer} />
+          <Button
+            title="Send Message"
+            onPress={sendWebSocketMessage}
+            disabled={!wsConnectionId || wsStatus !== 'Connected'}
+          />
+          <View style={styles.buttonSpacer} />
+          <Button
+            title="Check State"
+            onPress={checkWebSocketState}
+            disabled={!wsConnectionId}
+          />
+          <View style={styles.buttonSpacer} />
+          <Button
+            title="Disconnect WebSocket"
+            onPress={disconnectWebSocket}
+            disabled={!wsConnectionId}
           />
         </Group>
 
@@ -743,6 +889,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 4,
+  },
+  wsStatusContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+    padding: 10,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 8,
+  },
+  wsStatusLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#666",
+  },
+  wsStatusText: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#999",
+  },
+  wsStatusConnected: {
+    color: "#4CAF50",
   },
   group: {
     margin: 20,
