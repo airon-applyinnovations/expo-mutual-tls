@@ -277,7 +277,7 @@ export class ExpoMutualTls {
     callback: (connectionId: string, data: string) => void
   ) {
     return ExpoMutualTlsModule.addListener("onWebSocketEvent", (event) => {
-      if (event.type === "message") callback(event.connectionId, event.data);
+      if (event.type === "message") callback(event.connectionId, event.data || "");
     });
   }
 
@@ -307,7 +307,7 @@ export class ExpoMutualTls {
    */
   static onWebSocketError(callback: (connectionId: string, error: string) => void) {
     return ExpoMutualTlsModule.addListener("onWebSocketEvent", (event) => {
-      if (event.type === "error") callback(event.connectionId, event.error);
+      if (event.type === "error") callback(event.connectionId, event.error || "");
     });
   }
 }
